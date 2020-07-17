@@ -1,6 +1,12 @@
 import socket
 import sys
 import time
+import base64
+
+
+
+SECRET_CREDENTIALS = b"root:password"
+
 
 
 class WebServer:
@@ -37,6 +43,9 @@ class WebServer:
             header = "HTTP/1.1 200 OK\r\n"
         elif status_code == 404:
             header = "HTTP/1.1 404 Not found\r\n"
+        elif status_code == 401:
+            header = "HTTP/1.1 401 Unauthorized\r\n"
+            header += 'WWW-Authenticate: Basic realm="Access to the site"\r\n'
 
         time_now = time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime())
         header += 'Date: {now}\r\n'.format(now=time_now)
@@ -64,43 +73,59 @@ class WebServer:
             request_method = data.split(' ')[0]
             print(f"Method: {request_method}")
             print(f"Request: {data}")
-            if request_method == "GET":
-                request_path = data.split(' ')[1]
+            if request_method == "GET" and "Authorization" in data:
+                for line in data.split('\r\n'):
+                    if "Authorization:" in line:
+                        password = line.split(' ')[2]
+                        print(f"Recieved password: {password}")
+                        if self.do_auth(password):
+                            request_path = data.split(' ')[1]
 
-                if request_path == "/":
-                    request_path = "/index.html"
+                            if request_path == "/":
+                                request_path = "/index.html"
 
-                filepath_to_serve = self.content_folder + request_path
-                print(f"Serving web page {filepath_to_serve}")
+                            filepath_to_serve = self.content_folder + request_path
+                            print(f"Serving web page {filepath_to_serve}")
 
-                try:
-                    f = open(filepath_to_serve, 'rb')
-                    if request_method == "GET":
-                        response_data = f.read()
-                    f.close()
-                    response_header = self.generate_headers(200)
-                except Exception:
-                    print("File not found. Serving 404 page.")
-                    response_header = self.generate_headers(404)
+                            try:
+                                f = open(filepath_to_serve, 'rb')
+                                if request_method == "GET":
+                                    response_data = f.read()
+                                f.close()
+                                response_header = self.generate_headers(200)
+                            except Exception:
+                                print("File not found. Serving 404 page.")
+                                response_header = self.generate_headers(404)
 
-                    if request_method == "GET":
-                        response_data = (b"<html><body><center><h1>Error 404:"
-                                         b"File not found</h1></center><p>Head"
-                                         b' back to <a href="/">dry land</a>.'
-                                         b"</p></body></html>")
+                                if request_method == "GET":
+                                    response_data = (b"<html><body><center><h1>Error 404:"
+                                                    b"File not found</h1></center><p>Head"
+                                                    b' back to <a href="/">dry land</a>.'
+                                                    b"</p></body></html>")
 
-                response = response_header.encode()
-                if request_method == "GET":
-                    response += response_data
-
-                conn.sendall(response)
+                            response = response_header.encode()
+                            if request_method == "GET":
+                                response += response_data
+                            conn.sendall(response)
+                            print("Sent!")
+                            break
+                        else:
+                            print("Wrong credentials entered")
+            elif request_method == "GET" and "Authorization" not in data:
+                response_header = self.generate_headers(401)
+                print(f"401 Header: {response_header}")
+                conn.sendall(response_header.encode())
                 print("Sent!")
-                conn.close()
                 break
             else:
                 print("Unknown HTTP request method: {method}".format(
                     method=request_method))
+        conn.close()
 
+    def do_auth(self, password):
+        if base64.standard_b64decode(password.encode()) == SECRET_CREDENTIALS:
+            return True
+        return False
 
 if __name__ == "__main__":
     server = WebServer()
