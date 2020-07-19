@@ -4,7 +4,11 @@ import time
 import base64
 
 SECRET_CREDENTIALS = b"root:password"
-METHODS = ["GET", "POST"]
+METHODS = [b"GET", b"POST"]
+
+
+class TooMuchMemory:
+    pass
 
 
 class WebServer:
@@ -53,105 +57,112 @@ class WebServer:
         header += 'Connection: close\r\n'
         header += 'Encoding: gzip\r\n'
         header += '\r\n'
-        return header
+        return header.encode()
 
     def _listen(self):
         self.sock.listen()
         while True:
             conn, addr = self.sock.accept()
+            # self.sock.settimeout(5)
             print("Recieved connection from {}".format(addr))
             self._handle_request(conn, addr)
 
     def _handle_request(self, conn, addr):
-        PACKET_SIZE = 1024
-
-        while True:
-            all_data = conn.recv(PACKET_SIZE).decode()
-            if not all_data:
-                break
-            print(f"All data: {all_data}")
-            print(f"Type of all_data: {type(all_data)}")
-            data = all_data.split('\r\n')
-            print(f"splitted data: {data}")
-            print(data)
-            headers = {}
-            request_line = data[0].split(" ")
-            method, path = request_line[0], request_line[1]
-            for line in data:
-                if ":" in line:
-                    parts = line.split(":")
-                    headers[parts[0]] = parts[1].strip()
-            print(f"Method: {method}")
-            print(f"Headers: {headers}")
-            print(f"Request: {data}")
-            if method not in METHODS:
-                print("Unknown HTTP request method: {method}".format(
-                    method=method))
-            elif "Authorization" in headers:
-                auth_type, password = (
-                    headers["Authorization"].split(" ")[0].strip(),
-                    headers["Authorization"].split(" ")[1].strip())
-                print(f"auth_type: {auth_type}, password: {password}")
-                if self.process_auth(auth_type, password):
-                    if path == "/":
-                        path = "/index.html"
-
-                    filepath_to_serve = self.content_folder + path
-                    print(f"Serving web page {filepath_to_serve}")
-
-                    try:
-                        if method == "GET":
-                            f = open(filepath_to_serve, 'rb')
-                            response_data = f.read()
-                            response_header = self.generate_headers(200)  # my comments take up more than 88 symbols
-                            f.close()
-                        elif method == "POST":
-                            values = {}
-                            passed_data = all_data.split("\r\n\r\n")[1].split("&")
-                            for item in passed_data:
-                                temp = item.split("=")
-                                values[temp[0]] = temp[1]
-                            response_header = self.generate_headers(202)
-                            response_data = self.create_page_with_data(str(values))
-                            print(f"passed data: {values}")
-                    except Exception:
-                        print("File not found. Serving 404 page.")
-                        response_header = self.generate_headers(404)
-                        if method == "GET":
-                            response_data = (b"<html><body><center><h1>Error 404:"
-                                             b"File not found</h1></center><p>Head"
-                                             b' back to <a href="/">dry land</a>.'
-                                             b"</p></body></html>")
-                    response = response_header.encode()
-                    print(f"RESPONSE DATA: {response_data}")
-                    response += response_data
-                    conn.sendall(response)
-                    print(f"RESPONSE: {response}")
-                    print("Sent!")
-                    break
-                else:
-                    print("Wrong credentials entered")
-            elif "Authorization" not in data:
-                response_header = self.generate_headers(401)
-                print(f"401 Header: {response_header}")
-                conn.sendall(response_header.encode())
-                print("Sent!")
-                break
+        first_line = self.read_until(conn, chars="\r\n")
+        method, path = self.parse_request(first_line)
+        request_headers = self.read_until(conn, chars="\r\n\r\n")
+        headers = self.parse_headers(request_headers)
+        if method not in METHODS:
+            print(f"Unknown HTTP request method: {method}")
+        elif b"Authorization" in headers:
+            if self.process_auth(headers[b'Authorization']):
+                if path == b"/":
+                    path = b"/index.html"
+                filepath_to_serve = self.content_folder.encode() + path
+                try:
+                    if method == b"GET":
+                        with open(filepath_to_serve, 'rb') as f:
+                            response_data = self.generate_headers(200) + f.read()
+                    elif method == b"POST":
+                        content_length = headers[b'Content-Length']
+                        passed_info = self.read_remaining(conn, content_length)
+                        if not passed_info:
+                            raise TooMuchMemory()
+                        response_data = (self.generate_headers(202) +
+                                         self.create_page_with_data(passed_info))
+                        print(f"passed data POST: {response_data}")
+                except TooMuchMemory:
+                    response_data = b"16 mb is too much."
+                except Exception:
+                    response_data = self.generate_404()
+                conn.sendall(response_data)
+            else:
+                print("Wrong credentials entered")
+        elif b"Authorization" not in headers:
+            response_header = self.generate_headers(401)
+            conn.sendall(response_header)
         conn.close()
 
-    def process_auth(self, auth_type, password):
-        if auth_type == "Basic":
-            if (base64.standard_b64decode(password.encode()) ==
-                    SECRET_CREDENTIALS):
+    def process_auth(self, auth_data):
+        data = auth_data.split(b" ")
+        method = data[0]
+        if method == b"Basic":
+            password = data[1]
+            if (base64.standard_b64decode(password) == SECRET_CREDENTIALS):
                 return True
         return False
+
+    def generate_404(self, msg=""):
+        print("File not found. Serving 404 page.")
+        response_header = self.generate_headers(404)
+        with open("stuff/404.html", "rb") as f:
+            response_data = f.read()
+        return response_header + response_data
 
     def create_page_with_data(self, data):
         with open("stuff/base.html", "rb") as f:
             text = f.read()
             parts = text.split(b"<body>")
-            new_data = parts[0] + data.encode()
+            new_data = parts[0] + data
             return new_data + parts[1]
+
+    def parse_request(self, request: str) -> tuple:
+        """Return method as first return value and path as second value
+        """
+        parts = request.split(b" ")
+        return parts[0], parts[1]
+
+    def parse_headers(self, headers_str: str) -> dict:
+        splitted_headers = headers_str.split(b"\r\n")
+        headers = {}
+        for line in splitted_headers:
+            parts = line.split(b":")
+            if parts == [b""]:
+                break
+            headers[parts[0]] = parts[1].strip()
+        return headers
+
+    def read_until(self, sock, chars="\r\n") -> str:
+        temp = b""
+        while True:
+            data = sock.recv(1)
+            if not data:
+                break
+            temp += data
+            if chars.encode() in temp:
+                return temp
+
+    def read_remaining(self, sock, bytes_number) -> str:
+        if int(bytes_number) >= 16777216:
+            print("Memory exceeded")
+            return False
+        temp = b""
+        while True:
+            data = sock.recv(int(bytes_number))
+            print(f"RECIEVED DATA: {data}")
+            if not data:
+                return temp
+            temp += data
 
 
 if __name__ == "__main__":
