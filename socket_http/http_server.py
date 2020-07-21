@@ -31,9 +31,7 @@ class WebServer:
 
     def shutdown(self):
         try:
-            print("Trying to close socket...")
             self.sock.close()
-            print("Socket closed")
         except Exception:
             print("Socket is already stopped or wasn't started")
             sys.exit(1)
@@ -63,7 +61,6 @@ class WebServer:
         self.sock.listen()
         while True:
             conn, addr = self.sock.accept()
-            # self.sock.settimeout(5)
             print("Recieved connection from {}".format(addr))
             self._handle_request(conn, addr)
 
@@ -132,15 +129,11 @@ class WebServer:
         parts = request.split(b" ")
         return parts[0], parts[1]
 
-    def parse_headers(self, headers_str: str) -> dict:
-        splitted_headers = headers_str.split(b"\r\n")
-        headers = {}
-        for line in splitted_headers:
-            parts = line.split(b":")
-            if parts == [b""]:
-                break
-            headers[parts[0]] = parts[1].strip()
-        return headers
+    @staticmethod
+    def parse_headers(headers_payload: str) -> dict:
+        delimiter = b":" if type(headers_payload) == bytes else ":"
+        items = [i.split(delimiter, 1) for i in headers_payload.splitlines() if delimiter in i]
+        return {k.strip(): v.strip() for k, v in items}
 
     def read_until(self, sock, chars="\r\n") -> str:
         temp = b""
@@ -159,7 +152,6 @@ class WebServer:
         temp = b""
         while True:
             data = sock.recv(int(bytes_number))
-            print(f"RECIEVED DATA: {data}")
             if not data:
                 return temp
             temp += data
